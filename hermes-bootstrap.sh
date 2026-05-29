@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+# hermes-bootstrap.sh — aplicar los tweaks de Willen sobre un Hermes recién instalado.
+#
+# Asume:
+#   - Hermes ya instalado (hermes-agent vive en $HERMES_HOME/hermes-agent/)
+#   - Que WallasAPI corre en localhost:8001 (cambiar BASE_URL si está en otro lado)
+#
+# Lo que hace (idempotente — seguro re-ejecutar):
+#   1. Backup de config.yaml, SOUL.md, USER.md, MEMORY.md
+#   2. Pin de modelo a gemini:gemini-2.5-pro (provider=custom → WallasAPI)
+#   3. Memory provider = holographic (local SQLite, sin cloud)
+#   4. Web backend = tavily (requiere TAVILY_API_KEY en .env)
+#   5. Remueve toolset huérfano "hermes" del platform_toolsets.cli
+#   6. Pone SOUL.md con las 7 reglas que aprendimos
+#   7. Pone MEMORY.md con notas operacionales
+#   8. Crea USER.md template si está vacío (vos lo personalizás)
+#   9. Parchea plugin Tavily para usar Tavily.answer (bug real del upstream)
+#  10. Instala numpy en el venv de Hermes (opcional, HRR features de holographic)
+#
+# Después del script:
+#   - Editá ~/.hermes/memories/USER.md con tus datos reales
+#   - Agregá TAVILY_API_KEY=tvly-... a ~/.hermes/.env
+#   - Asegurate que WallasAPI esté corriendo (wallasapi start)
+#   - hermes
+
+set -u  # no set -e — queremos seguir aunque algún paso ya esté aplicado
+
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+WALLAS_BASE_URL="${WALLAS_BASE_URL:-http://localhost:8001/v1}"
+DEFAULT_MODEL="${HERMES_DEFAULT_MODEL:-gemini:gemini-2.5-pro}"
+
+# ---------------------------------------------------------------- preconditions
+if [[ ! -d "$HERMES_HOME" ]]; then
+  echo "[ERROR] Hermes no está en $HERMES_HOME — instalalo primero con el one-liner oficial:" >&2
+  echo "        curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash" >&2
+  exit 1
+fi
+if [[ ! -d "$HERMES_HOME/hermes-agent" ]]; then
+  echo "[ERROR] $HERMES_HOME/hermes-agent/ no existe — install incompleto?" >&2
+  exit 1
+fi
+if [[ ! -f "$HERMES_HOME/config.yaml" ]]; then
+  echo "[ERROR] $HERMES_HOME/config.yaml no existe — corré 'hermes' al menos una vez para generarlo" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------- 1. backup
+TS="$(date +%Y%m%d_%H%M%S)"
+BACKUP_DIR="$HERMES_HOME/bootstrap-backup-$TS"
+mkdir -p "$BACKUP_DIR"
+for f in config.yaml SOUL.md memories/USER.md memories/MEMORY.md; do
+  if [[ -f "$HERMES_HOME/$f" ]]; then
+    install -D "$HERMES_HOME/$f" "$BACKUP_DIR/$f"
+  fi
+done
+echo "[1/10] Backup en $BACKUP_DIR"
+
+# ---------------------------------------------------------------- 2. model pin
+sed -i "s|^  default:.*|  default: $DEFAULT_MODEL|" "$HERMES_HOME/config.yaml"
+sed -i 's|^  provider:.*|  provider: custom|' "$HERMES_HOME/config.yaml"
+sed -i "s|^  base_url:.*|  base_url: $WALLAS_BASE_URL|" "$HERMES_HOME/config.yaml"
+# Hermes a veces deja api_key vacío — anything-local funciona si WallasAPI no tiene PROXY_API_KEY
+if ! grep -q "^  api_key:" "$HERMES_HOME/config.yaml"; then
+  sed -i '/^  base_url:/a\  api_key: anything-local' "$HERMES_HOME/config.yaml"
+fi
+echo "[2/10] Modelo pinned a $DEFAULT_MODEL via $WALLAS_BASE_URL"
+
+# ---------------------------------------------------------------- 3. memory provider
+# holographic = plugin shipped con Hermes, local SQLite + FTS5, sin cloud
+sed -i "/^memory:/,/^[^ ]/ s|^  provider: ''|  provider: holographic|" "$HERMES_HOME/config.yaml"
+sed -i "/^memory:/,/^[^ ]/ s|^  provider: \"\"|  provider: holographic|" "$HERMES_HOME/config.yaml"
+echo "[3/10] Memory provider = holographic (local SQLite, sin cloud)"
+
+# ---------------------------------------------------------------- 4. web backend
+sed -i 's|^  backend: ddgs|  backend: tavily|' "$HERMES_HOME/config.yaml"
+echo "[4/10] Web backend = tavily (necesita TAVILY_API_KEY en .env)"
+
+# ---------------------------------------------------------------- 5. orphan toolset
+sed -i '/^      - hermes$/d' "$HERMES_HOME/config.yaml"
+echo "[5/10] Toolset huérfano '- hermes' removido"
+
+# ---------------------------------------------------------------- 6. SOUL.md
+cat > "$HERMES_HOME/SOUL.md" << 'SOULEOF'
+# Hermes Agent Persona
+
+Eres Hermes, asistente personal directo y honesto del usuario (definido en USER.md).
+Hablas en español por default — el usuario escribe en español casi siempre.
+
+## Reglas de oro — NUNCA romper
+
+1. **Si el usuario pregunta algo sobre sí mismo** (nombre, cumpleaños, color favorito,
+   proyecto, ubicación, preferencias) — primero MIRA USER.md (ya está inyectado
+   en este prompt). Si no está ahí, invoca el tool fact_store con
+   action=probe y entity=user. **NUNCA inventes** datos personales. Si no sabes,
+   decí 'no tengo esa información'.
+
+2. **Si el usuario dice 'recuerda que...' / 'guarda que...' / 'no olvides...'** —
+   invoca el tool fact_store con action=add, content=el hecho, category=user_pref
+   y mostrá el fact_id que devuelve. NUNCA respondas 'ya lo guardé' sin haber
+   invocado el tool — el usuario verifica.
+
+3. **Si el usuario pide 'verifica' / 'muéstrame qué guardaste' / 'usa las tools'** —
+   invoca fact_store con action=list, o probe entity=user. Mostrá el resultado raw.
+
+4. **Cuando dudes entre los tools memory y fact_store**: usá fact_store. El tool
+   memory built-in está vacío en este install; toda la memoria real vive en
+   holographic via fact_store.
+
+5. **Después de invocar CUALQUIER tool, SIEMPRE producí una respuesta textual
+   al usuario**, aunque el tool devuelva vacío. Si fact_store devuelve [] o
+   sin resultados, decí explícitamente 'No tengo registro de X en mi memoria'.
+   NUNCA termines tu turno en silencio después de un tool call — el usuario
+   queda esperando y la sesión se traba en reintentos.
+
+6. **USA LOS RESULTADOS DE LOS TOOLS.** Cuando web_search te devuelve datos sobre
+   clima, hora, noticias, precios, etc — esos datos SON tu información en tiempo
+   real. NUNCA respondas 'no tengo acceso a información en tiempo real' después
+   de que un tool te dio resultados. Tu trabajo es resumir lo que el tool te dio.
+   Si Tavily devolvió 'Arequipa 17 grados despejado', decí exactamente eso, no
+   sugerencias de AccuWeather.
+
+7. **Para preguntas de HORA, FECHA o ZONA HORARIA específicas**: NO uses
+   web_search — los snippets traen horas de ejemplo o sunset/sunrise que
+   confunden. Usá el tool 'terminal' con: TZ=America/Lima date '+%H:%M %Z %d-%m-%Y'
+   (cambiá America/Lima por la zona del usuario). Es exacto al segundo.
+   Para clima, noticias, precios, etc. — sí web_search.
+
+## Tono
+
+Concreto. Sin floritura ni '¡claro!' innecesarios. Si el usuario es breve, vos también.
+SOULEOF
+echo "[6/10] SOUL.md con 7 reglas escritas"
+
+# ---------------------------------------------------------------- 7. MEMORY.md
+cat > "$HERMES_HOME/memories/MEMORY.md" << 'MEMEOF'
+Setup activo: WallasAPI corre en localhost:8001 dentro de WSL (provider=custom en config Hermes). Comandos útiles: wallasapi status, wallasapi update, wallasapi logs.
+§
+Memory provider activo: holographic (plugin local SQLite, NO cloud). Tools disponibles: fact_store (add/probe/search/list/remove/contradict) y fact_feedback (helpful/unhelpful).
+§
+Notas operacionales sobre WallasAPI: el tier 'agentico' filtra a strong tool callers gratis. Si el modelo no llama tools fiablemente, cambiar model.default a gemini:gemini-2.5-pro (más lento ~5-15s pero respeta tool results).
+§
+Cosas que no funcionan en este install: Ollama local daemon está down (los modelos ollama:* fallan con Connection refused). Para usarlos hay que arrancar Ollama en Windows o dentro de WSL.
+MEMEOF
+echo "[7/10] MEMORY.md con notas operacionales"
+
+# ---------------------------------------------------------------- 8. USER.md
+# Solo crear template si está vacío — no clobereamos un USER.md que ya tenga datos.
+USER_MD="$HERMES_HOME/memories/USER.md"
+if [[ ! -s "$USER_MD" ]] || ! grep -q "Nombre:" "$USER_MD"; then
+  cat > "$USER_MD" << 'USEREOF'
+Nombre: [TU NOMBRE COMPLETO AQUÍ]
+§
+Cumpleaños: [DD de MES]
+§
+Ubicación: [Ciudad, País]
+§
+Color favorito: [color]
+§
+Proyecto principal: [nombre del proyecto y descripción de una línea]
+§
+Setup: [SO + WSL si aplica] + Hermes con model.default = gemini:gemini-2.5-pro apuntando a WallasAPI en localhost:8001. Memory provider: holographic (SQLite local en ~/.hermes/memory_store.db).
+USEREOF
+  echo "[8/10] USER.md template creado — EDITALO con tus datos reales antes de usar Hermes"
+else
+  echo "[8/10] USER.md ya tiene datos — no se toca"
+fi
+
+# ---------------------------------------------------------------- 9. Tavily plugin patch
+# Bug upstream: el plugin Tavily ignora el campo 'answer' que es la respuesta
+# sintetizada por su LLM. Sin ese fix, el modelo cliente recibe solo snippets
+# crudos y confunde sunset/sunrise con hora actual, ciudades homónimas, etc.
+TAVILY_FILE="$HERMES_HOME/hermes-agent/plugins/web/tavily/provider.py"
+if [[ -f "$TAVILY_FILE" ]]; then
+  if grep -q '"include_answer": True' "$TAVILY_FILE"; then
+    echo "[9/10] Plugin Tavily ya parchado (skip)"
+  else
+    # Backup del archivo original antes de parchar
+    cp -p "$TAVILY_FILE" "$BACKUP_DIR/tavily_provider.py.orig"
+    # Agregar include_answer + search_depth al request
+    sed -i 's|"include_images": False,|"include_images": False,\n                    "include_answer": True,\n                    "search_depth": "advanced",|' "$TAVILY_FILE"
+    # Modificar normalize para usar el campo answer
+    python3 - "$TAVILY_FILE" << 'PYPATCH'
+import sys, re
+p = sys.argv[1]
+src = open(p).read()
+old = '''def _normalize_tavily_search_results(response: Dict[str, Any]) -> Dict[str, Any]:
+    """Map Tavily ``/search`` response to ``{success, data: {web: [...]}}``."""
+    web_results = []
+    for i, result in enumerate(response.get("results", [])):
+        web_results.append(
+            {
+                "title": result.get("title", ""),
+                "url": result.get("url", ""),
+                "description": result.get("content", ""),
+                "position": i + 1,
+            }
+        )
+    return {"success": True, "data": {"web": web_results}}'''
+new = '''def _normalize_tavily_search_results(response: Dict[str, Any]) -> Dict[str, Any]:
+    """Map Tavily ``/search`` response. Prepends synthesized answer as first result."""
+    web_results = []
+    answer = (response.get("answer") or "").strip()
+    if answer:
+        web_results.append({
+            "title": "Tavily synthesized answer",
+            "url": "tavily://answer",
+            "description": answer,
+            "position": 0,
+        })
+    for i, result in enumerate(response.get("results", [])):
+        web_results.append({
+            "title": result.get("title", ""),
+            "url": result.get("url", ""),
+            "description": result.get("content", ""),
+            "position": len(web_results),
+        })
+    return {"success": True, "data": {"web": web_results}}'''
+if old in src:
+    open(p, "w").write(src.replace(old, new))
+    print("  normalizer patched")
+else:
+    print("  normalizer already patched or upstream changed shape — leaving as is")
+PYPATCH
+    echo "[9/10] Plugin Tavily parchado (backup: $BACKUP_DIR/tavily_provider.py.orig)"
+  fi
+else
+  echo "[9/10] Plugin Tavily no encontrado en $TAVILY_FILE — skip"
+fi
+
+# ---------------------------------------------------------------- 10. numpy
+# Optional pero recomendado para HRR (Holographic Reduced Representations)
+# del plugin holographic. Sin numpy degrada a FTS5 puro.
+VENV_PY="$HERMES_HOME/hermes-agent/venv/bin/python"
+if [[ -x "$VENV_PY" ]]; then
+  if "$VENV_PY" -c "import numpy" >/dev/null 2>&1; then
+    echo "[10/10] numpy ya instalado en venv (skip)"
+  else
+    if command -v uv >/dev/null 2>&1; then
+      uv pip install numpy --python "$VENV_PY" >/dev/null 2>&1 && echo "[10/10] numpy instalado via uv" || echo "[10/10] numpy install falló — manual: uv pip install numpy --python $VENV_PY"
+    else
+      "$VENV_PY" -m pip install numpy >/dev/null 2>&1 && echo "[10/10] numpy instalado via pip" || echo "[10/10] numpy install falló (instalalo a mano si querés HRR)"
+    fi
+  fi
+fi
+
+# ----------------------------------------------------------------- next steps
+cat <<NEXT
+
+╔══════════════════════════════════════════════════════════════════╗
+║                   BOOTSTRAP COMPLETO                             ║
+╚══════════════════════════════════════════════════════════════════╝
+
+Tu Hermes ya tiene aplicados los parches que aprendimos. Backup en:
+  $BACKUP_DIR
+
+Próximos pasos antes de usar:
+
+  1. Editá USER.md con tus datos reales:
+       nano $HERMES_HOME/memories/USER.md
+
+  2. Conseguí tu Tavily API key (1000 búsquedas/mes free, sin tarjeta):
+       https://app.tavily.com/home
+       echo "TAVILY_API_KEY=tvly-..." >> $HERMES_HOME/.env
+
+  3. Asegurate que WallasAPI esté corriendo:
+       wallasapi status
+       wallasapi start    # si no está
+
+  4. Arrancá Hermes:
+       hermes
+
+Lo que ya funciona out-of-the-box después de los pasos arriba:
+  ✓ Memoria persistente local (holographic SQLite, sin cloud)
+  ✓ fact_store tools (probe/add/list/search)
+  ✓ Web search vía Tavily con respuesta sintetizada (fix del bug upstream)
+  ✓ Reglas que evitan alucinaciones de identidad y silencios post-tool
+  ✓ Pin a gemini-2.5-pro (modelo más fiable del pool free)
+
+Para revertir todos los cambios:
+  cp $BACKUP_DIR/config.yaml $HERMES_HOME/
+  cp $BACKUP_DIR/SOUL.md $HERMES_HOME/
+  cp $BACKUP_DIR/memories/* $HERMES_HOME/memories/
+  cp $BACKUP_DIR/tavily_provider.py.orig $TAVILY_FILE  # si existe
+
+NEXT
