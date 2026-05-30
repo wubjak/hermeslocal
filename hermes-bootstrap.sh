@@ -64,13 +64,25 @@ if ! grep -q "^  api_key:" "$HERMES_HOME/config.yaml"; then
   sed -i '/^  base_url:/a\  api_key: anything-local' "$HERMES_HOME/config.yaml"
 fi
 # Terminal tool: forzar shell host (backend=local), sin docker ni modal fallback.
-# Bug observado: con docker_image o modal_mode=auto setteados, Hermes a veces
-# spawnea un sandbox con reloj congelado y reporta fechas de 2024 cuando el
-# host está en 2026. Vaciar docker_image y poner modal_mode=never lo evita.
+# Bugs observados:
+#  - Con docker_image o modal_mode=auto setteados, Hermes a veces spawnea un
+#    sandbox con reloj congelado y reporta fechas de 2024 cuando el host está
+#    en 2026. Vaciar docker_image + modal_mode=never lo evita.
+#  - persistent_shell=true cachea una shell con env del primer spawn (TZ raro,
+#    etc). Resultado: 'date' devuelve hora UTC+1 o similar en lugar del TZ
+#    del sistema. Cambiando a persistent_shell=false cada comando agarra
+#    /etc/timezone correctamente.
 sed -i "/^terminal:/,/^[^ ]/ s|^  backend:.*|  backend: local|" "$HERMES_HOME/config.yaml"
 sed -i 's|^  modal_mode:.*|  modal_mode: never|' "$HERMES_HOME/config.yaml"
 sed -i 's|^  docker_image:.*|  docker_image: ""|' "$HERMES_HOME/config.yaml"
-echo "[2/10] Modelo pinned a $DEFAULT_MODEL via $WALLAS_BASE_URL; terminal forzado a local sin docker/modal"
+sed -i 's|^  persistent_shell:.*|  persistent_shell: false|' "$HERMES_HOME/config.yaml"
+# Bashrc: asegurar TZ=America/Lima (cambiá por tu TZ si vives en otra zona).
+# Hermes auto-sourcea bashrc en cada nueva shell — esto garantiza que `date`
+# devuelva la zona local sin depender de que el modelo recuerde el prefijo TZ=...
+if ! grep -q "^export TZ=" "$HOME/.bashrc" 2>/dev/null; then
+  echo "export TZ=America/Lima" >> "$HOME/.bashrc"
+fi
+echo "[2/10] Modelo pinned a $DEFAULT_MODEL via $WALLAS_BASE_URL; terminal local + persistent_shell off; TZ exportado en bashrc"
 
 # ---------------------------------------------------------------- 3. memory provider
 # holographic = plugin shipped con Hermes, local SQLite + FTS5, sin cloud
