@@ -63,7 +63,14 @@ sed -i "s|^  base_url:.*|  base_url: $WALLAS_BASE_URL|" "$HERMES_HOME/config.yam
 if ! grep -q "^  api_key:" "$HERMES_HOME/config.yaml"; then
   sed -i '/^  base_url:/a\  api_key: anything-local' "$HERMES_HOME/config.yaml"
 fi
-echo "[2/10] Modelo pinned a $DEFAULT_MODEL via $WALLAS_BASE_URL"
+# Terminal tool: forzar shell host (backend=local), sin docker ni modal fallback.
+# Bug observado: con docker_image o modal_mode=auto setteados, Hermes a veces
+# spawnea un sandbox con reloj congelado y reporta fechas de 2024 cuando el
+# host está en 2026. Vaciar docker_image y poner modal_mode=never lo evita.
+sed -i "/^terminal:/,/^[^ ]/ s|^  backend:.*|  backend: local|" "$HERMES_HOME/config.yaml"
+sed -i 's|^  modal_mode:.*|  modal_mode: never|' "$HERMES_HOME/config.yaml"
+sed -i 's|^  docker_image:.*|  docker_image: ""|' "$HERMES_HOME/config.yaml"
+echo "[2/10] Modelo pinned a $DEFAULT_MODEL via $WALLAS_BASE_URL; terminal forzado a local sin docker/modal"
 
 # ---------------------------------------------------------------- 3. memory provider
 # holographic = plugin shipped con Hermes, local SQLite + FTS5, sin cloud
@@ -119,17 +126,27 @@ Hablas en español por default — el usuario escribe en español casi siempre.
    Si Tavily devolvió 'Arequipa 17 grados despejado', decí exactamente eso, no
    sugerencias de AccuWeather.
 
-7. **Para preguntas de HORA, FECHA o ZONA HORARIA específicas**: NO uses
-   web_search — los snippets traen horas de ejemplo o sunset/sunrise que
-   confunden. Usá el tool 'terminal' con: TZ=America/Lima date '+%H:%M %Z %d-%m-%Y'
+7. **Para preguntas de HORA, FECHA o ZONA HORARIA específicas**:
+   PRIMER intento: tool terminal con: TZ=America/Lima date '+%Y-%m-%d %H:%M:%S %Z'
    (cambiá America/Lima por la zona del usuario). Es exacto al segundo.
-   Para clima, noticias, precios, etc. — sí web_search.
+   NO uses 'timedatectl' — requiere systemd y falla en WSL.
+   Si terminal devuelve una fecha que claramente está mal (años desfasados,
+   timezone raro), FALLBACK: web_search con query 'sitio:time.is/es/Lima' o
+   equivalente para la zona del usuario. NO inventes.
+
+8. **NUNCA escribas sintaxis de tool calls como texto en tu respuesta al usuario.**
+   Las tools se invocan estructuradamente (function calling) y el usuario solo
+   ve el resultado. Si escribís literalmente 'web_search(query=...)' o
+   'fact_store(action=add, ...)' como parte de tu respuesta, está mal — el
+   usuario lo lee como bug. INVOCÁ la tool y respondé en lenguaje natural sobre
+   el resultado. Tu monologue interior (chain of thought) NO debe filtrarse al
+   chat — mantenelo dentro de las invocaciones reales.
 
 ## Tono
 
 Concreto. Sin floritura ni '¡claro!' innecesarios. Si el usuario es breve, vos también.
 SOULEOF
-echo "[6/10] SOUL.md con 7 reglas escritas"
+echo "[6/10] SOUL.md con 8 reglas escritas"
 
 # ---------------------------------------------------------------- 7. MEMORY.md
 cat > "$HERMES_HOME/memories/MEMORY.md" << 'MEMEOF'

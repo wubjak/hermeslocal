@@ -5,11 +5,16 @@ Script que aplica los tweaks que sacamos en este experimento sobre un Hermes Age
 ## Qué hace el script (10 pasos, idempotente)
 
 1. **Backup** de `config.yaml`, `SOUL.md`, `USER.md`, `MEMORY.md` antes de tocar nada
-2. Pin del **modelo default** a `gemini:gemini-2.5-pro` (`provider: custom` → WallasAPI en `localhost:8001`)
+2. Pin del **modelo default** a `gemini:gemini-2.5-pro` (`provider: custom` → WallasAPI en `localhost:8001`) y **fuerza terminal tool a backend `local`** (sin docker / modal fallback — evita el bug donde el sandbox reporta fechas de 2024 cuando el host está en 2026)
 3. **Memory provider = holographic** (plugin shipped con Hermes, local SQLite + FTS5, sin cloud, sin API key extra)
 4. **Web backend = tavily** (necesita `TAVILY_API_KEY` — free tier 1000/mes en https://tavily.com)
 5. Remueve **toolset huérfano `- hermes`** del `platform_toolsets.cli` (era versión antigua, dispara warnings)
-6. Escribe **SOUL.md con 7 reglas** que aprendimos a base de probar — evitan alucinaciones de identidad, silencios post-tool, ignorar resultados de search, e instruyen usar `terminal` para hora exacta en lugar de scraping
+6. Escribe **SOUL.md con 8 reglas** que aprendimos a base de probar:
+   - 1-4: usar fact_store / USER.md para identidad, nunca inventar
+   - 5: siempre producir texto post-tool (evita loops de retry por respuesta vacía)
+   - 6: usar resultados de tools, no dar disclaimers de "no tengo acceso a tiempo real"
+   - 7: para hora/fecha usar `date` en terminal (no `timedatectl`, que requiere systemd); fallback a time.is via web_search
+   - 8: nunca escribir sintaxis de tool calls como texto en la respuesta al usuario
 7. Escribe **MEMORY.md con notas operacionales** del setup (WallasAPI, comandos útiles, qué hacer si el modelo falla)
 8. Crea **USER.md template** si está vacío (con placeholders `[TU NOMBRE]` para personalizar)
 9. **Parchea el plugin Tavily** del propio Hermes — bug real upstream: ignoraba el campo `answer` de Tavily (la respuesta sintetizada por su LLM, que es lo único confiable). Sin el parche, el modelo cliente solo veía snippets crudos y confundía sunset con hora actual
