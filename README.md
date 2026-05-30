@@ -64,11 +64,14 @@ Todos free, vía WallasAPI. De más fiable a más rápido:
 
 | Modelo | Velocidad | Sigue reglas SOUL.md | Cuándo elegirlo |
 |---|---|---|---|
-| `gemini:gemini-2.5-pro` | 5-15s | ✓ alto | Default — máxima fiabilidad |
-| `nvidia:mistralai/mistral-medium-3.5-128b` | 3-8s | ✓ medio-alto | Si Gemini Pro tiene rate limit |
-| `nvidia:mistralai/mistral-nemotron` | 2-5s | medio (mezcla idiomas a veces, fabrica al sintetizar) | Velocidad sobre exactitud |
-| `groq:meta-llama/llama-4-scout-17b-16e-instruct` | 1-2s | medio | Más rápido pero descuidado |
-| `agentico` | variable | ruleta | Si querés rotación automática del tier |
+| `nvidia:mistralai/mistral-large-3-675b-instruct-2512` | 3-5s (cold start 10-30s) | ✓ alto | **Default — el ganador empírico**. 675B MoE agentic-tuned. Invoca tools correctamente vía WallasAPI sin alucinar |
+| `nvidia:mistralai/mistral-medium-3.5-128b` | 3-8s | ✓ medio-alto | Si Mistral Large 3 está saturado |
+| `gemini:gemini-2.5-pro` | 5-15s | parcial (con WallasAPI a veces no respeta function-calling schema, ver problema conocido abajo) | Backup si NVIDIA está caído |
+| `nvidia:mistralai/mistral-nemotron` | 2-5s | medio (mezcla idiomas a veces) | Más rápido pero descuidado |
+| `groq:meta-llama/llama-4-scout-17b-16e-instruct` | 1-2s | medio | Velocidad pura |
+| `agentico` | variable | ruleta | Rotación automática del tier (puede caer en modelos débiles) |
+
+**Problema conocido con Gemini via WallasAPI**: a veces el modelo no recibe el schema de tools y responde con sintaxis de tool calls como texto (`fact_store(action='probe', ...)`) en lugar de invocarlas, o niega tener acceso al sistema. Es un bug de integración WallasAPI ↔ Gemini provider que no resolvimos. Mistral Large 3 vía NVIDIA NIM no tiene este problema — function calling pasa limpio. Por eso es el default.
 
 ## Rollback
 

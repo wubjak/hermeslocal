@@ -27,7 +27,7 @@ set -u  # no set -e — queremos seguir aunque algún paso ya esté aplicado
 
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 WALLAS_BASE_URL="${WALLAS_BASE_URL:-http://localhost:8001/v1}"
-DEFAULT_MODEL="${HERMES_DEFAULT_MODEL:-gemini:gemini-2.5-pro}"
+DEFAULT_MODEL="${HERMES_DEFAULT_MODEL:-nvidia:mistralai/mistral-large-3-675b-instruct-2512}"
 
 # ---------------------------------------------------------------- preconditions
 if [[ ! -d "$HERMES_HOME" ]]; then
