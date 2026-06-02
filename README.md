@@ -64,14 +64,17 @@ Todos free, vía WallasAPI. De más fiable a más rápido:
 
 | Modelo | Velocidad | Sigue reglas SOUL.md | Cuándo elegirlo |
 |---|---|---|---|
-| `nvidia:mistralai/mistral-large-3-675b-instruct-2512` | 3-5s (cold start 10-30s) | ✓ alto | **Default — el ganador empírico**. 675B MoE agentic-tuned. Invoca tools correctamente vía WallasAPI sin alucinar |
-| `nvidia:mistralai/mistral-medium-3.5-128b` | 3-8s | ✓ medio-alto | Si Mistral Large 3 está saturado |
+| `nvidia:mistralai/ministral-14b-instruct-2512` | 2-4s | ✓ alto | **Default — el ganador empírico revisado**. 14B compacto, sin cold start, tool calling limpio vía WallasAPI, títulos coherentes en español |
+| `nvidia:mistralai/mistral-large-3-675b-instruct-2512` | 3-5s (cold start 10-30s) | ✓ alto | Si querés más calidad y aguantás cold starts ocasionales. 675B MoE agentic-tuned |
+| `nvidia:mistralai/mistral-medium-3.5-128b` | 3-8s | ✓ medio-alto | Backup intermedio si Mistral Large 3 está saturado |
 | `gemini:gemini-2.5-pro` | 5-15s | parcial (con WallasAPI a veces no respeta function-calling schema, ver problema conocido abajo) | Backup si NVIDIA está caído |
-| `nvidia:mistralai/mistral-nemotron` | 2-5s | medio (mezcla idiomas a veces) | Más rápido pero descuidado |
+| `nvidia:nvidia/nemotron-3-nano-30b-a3b` | 2-5s | medio (mezcla idiomas a veces) | Alternativa rápida — el router lo usa como fallback automático |
 | `groq:meta-llama/llama-4-scout-17b-16e-instruct` | 1-2s | medio | Velocidad pura |
 | `agentico` | variable | ruleta | Rotación automática del tier (puede caer en modelos débiles) |
 
-**Problema conocido con Gemini via WallasAPI**: a veces el modelo no recibe el schema de tools y responde con sintaxis de tool calls como texto (`fact_store(action='probe', ...)`) en lugar de invocarlas, o niega tener acceso al sistema. Es un bug de integración WallasAPI ↔ Gemini provider que no resolvimos. Mistral Large 3 vía NVIDIA NIM no tiene este problema — function calling pasa limpio. Por eso es el default.
+**Por qué Ministral 14B y no Mistral Large 3**: el 675B tiene cold-start de 10-30s en cada primer hit y suele timing-out (`ReadTimeout` en WallasAPI). El router lo destrona vía fallback a Ministral 14B / Nemotron Nano, que terminan respondiendo igual de bien — pero al sufrir el timeout primero, el usuario percibe Hermes "colgado" varios segundos. Pinneando Ministral 14B directo evitás el rodeo: arranca caliente, mantiene tool-calling limpio, y los títulos generados son coherentes.
+
+**Problema conocido con Gemini via WallasAPI**: a veces el modelo no recibe el schema de tools y responde con sintaxis de tool calls como texto (`fact_store(action='probe', ...)`) en lugar de invocarlas, o niega tener acceso al sistema. Es un bug de integración WallasAPI ↔ Gemini provider que no resolvimos. Los modelos NVIDIA NIM (Ministral 14B, Mistral Large 3, Nemotron) no tienen este problema — function calling pasa limpio.
 
 ## Rollback
 
