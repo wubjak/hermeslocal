@@ -7,21 +7,26 @@
 #
 # Lo que hace (idempotente — seguro re-ejecutar):
 #   1. Backup de config.yaml, SOUL.md, USER.md, MEMORY.md
-#   2. Pin de modelo a gemini:gemini-2.5-pro (provider=custom → WallasAPI)
+#   2. Pin de modelo a nvidia:mistralai/ministral-14b-instruct-2512 (vía WallasAPI)
 #   3. Memory provider = holographic (local SQLite, sin cloud)
 #   4. Web backend = tavily (requiere TAVILY_API_KEY en .env)
 #   5. Remueve toolset huérfano "hermes" del platform_toolsets.cli
-#   6. Pone SOUL.md con las 7 reglas que aprendimos
+#   6. Pone SOUL.md con las 10 reglas que aprendimos
 #   7. Pone MEMORY.md con notas operacionales
 #   8. Crea USER.md template si está vacío (vos lo personalizás)
 #   9. Parchea plugin Tavily para usar Tavily.answer (bug real del upstream)
 #  10. Instala numpy en el venv de Hermes (opcional, HRR features de holographic)
+#  11. Instala wrapper `hermes-up` en ~/.local/bin (actualiza Hermes y re-aplica
+#      parches en una sola operación — usalo SIEMPRE en lugar de `hermes update`)
 #
 # Después del script:
 #   - Editá ~/.hermes/memories/USER.md con tus datos reales
 #   - Agregá TAVILY_API_KEY=tvly-... a ~/.hermes/.env
 #   - Asegurate que WallasAPI esté corriendo (wallasapi start)
 #   - hermes
+#
+# Para actualizar Hermes a futuras versiones:
+#   hermes-up      # NO uses `hermes update` directo, te borra los parches
 
 set -u  # no set -e — queremos seguir aunque algún paso ya esté aplicado
 
@@ -327,6 +332,36 @@ if [[ -x "$VENV_PY" ]]; then
   fi
 fi
 
+# ---------------------------------------------------------------- 11. hermes-up wrapper
+# Cuando el usuario corra `hermes update`, el git pull de Hermes pisa el patch
+# del plugin Tavily. El wrapper `hermes-up` corre `hermes update` y después
+# re-ejecuta este mismo bootstrap para restaurar todos los parches en una
+# sola operación. Resuelve la ruta absoluta del script para que el symlink
+# en ~/.local/bin pueda llamarlo después.
+BOOTSTRAP_PATH="$( cd -P "$( dirname "${BASH_SOURCE[0]}" )" && pwd )/$(basename "${BASH_SOURCE[0]}")"
+USER_BIN="$HOME/.local/bin"
+mkdir -p "$USER_BIN"
+cat > "$USER_BIN/hermes-up" <<HERMUP
+#!/usr/bin/env bash
+# hermes-up — actualiza Hermes y re-aplica los parches locales.
+# Generado por hermes-bootstrap.sh (no editar a mano, se sobrescribe en cada
+# corrida del bootstrap).
+set -e
+echo "[1/3] Actualizando Hermes core (hermes update)..."
+hermes update --skip-restart 2>/dev/null || hermes update
+echo "[2/3] Re-aplicando parches locales (bootstrap)..."
+"$BOOTSTRAP_PATH"
+echo "[3/3] Listo. Reiniciá Hermes con: hermes"
+HERMUP
+chmod +x "$USER_BIN/hermes-up"
+# Asegurar que ~/.local/bin esté en el PATH (vía ~/.bashrc).
+if ! grep -Fq '$HOME/.local/bin' "$HOME/.bashrc" 2>/dev/null; then
+  echo '' >> "$HOME/.bashrc"
+  echo '# Added by hermes-bootstrap.sh' >> "$HOME/.bashrc"
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+fi
+echo "[11/11] Wrapper hermes-up instalado en $USER_BIN/hermes-up"
+
 # ----------------------------------------------------------------- next steps
 cat <<NEXT
 
@@ -353,17 +388,22 @@ Próximos pasos antes de usar:
   4. Arrancá Hermes:
        hermes
 
+Para actualizar Hermes a futuras versiones (re-aplica parches automáticamente):
+  hermes-up      # NUNCA uses 'hermes update' directo, te borra los parches
+
 Lo que ya funciona out-of-the-box después de los pasos arriba:
   ✓ Memoria persistente local (holographic SQLite, sin cloud)
   ✓ fact_store tools (probe/add/list/search)
   ✓ Web search vía Tavily con respuesta sintetizada (fix del bug upstream)
   ✓ Reglas que evitan alucinaciones de identidad y silencios post-tool
-  ✓ Pin a gemini-2.5-pro (modelo más fiable del pool free)
+  ✓ Default model = Ministral 14B (verificado como mejor tool caller del free tier)
+  ✓ Wrapper hermes-up que sobrevive a los updates del core
 
 Para revertir todos los cambios:
   cp $BACKUP_DIR/config.yaml $HERMES_HOME/
   cp $BACKUP_DIR/SOUL.md $HERMES_HOME/
   cp $BACKUP_DIR/memories/* $HERMES_HOME/memories/
   cp $BACKUP_DIR/tavily_provider.py.orig $TAVILY_FILE  # si existe
+  rm $USER_BIN/hermes-up
 
 NEXT
