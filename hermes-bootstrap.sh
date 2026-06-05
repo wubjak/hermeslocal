@@ -332,6 +332,28 @@ if [[ -x "$VENV_PY" ]]; then
   fi
 fi
 
+# ---------------------------------------------------------------- 10b. API_SERVER_KEY
+# Hermes Gateway (v0.14+) se niega a arrancar el api_server platform si
+# API_SERVER_KEY no está seteado, incluso para binds loopback-only en
+# 127.0.0.1. Generamos una key local random si no existe; la dejamos en
+# .env (no en config.yaml) para mantenerla fuera de git.
+ENV_FILE="$HERMES_HOME/.env"
+if [[ -f "$ENV_FILE" ]] && grep -q "^API_SERVER_KEY=" "$ENV_FILE" 2>/dev/null; then
+  echo "[10b/11] API_SERVER_KEY ya presente en .env (skip)"
+else
+  if command -v openssl >/dev/null 2>&1; then
+    GEN_KEY=$(openssl rand -hex 32)
+  else
+    GEN_KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  fi
+  {
+    echo ""
+    echo "# API key del gateway (loopback only) — generada por hermes-bootstrap.sh"
+    echo "API_SERVER_KEY=$GEN_KEY"
+  } >> "$ENV_FILE"
+  echo "[10b/11] API_SERVER_KEY generada y agregada a $ENV_FILE"
+fi
+
 # ---------------------------------------------------------------- 11. hermes-up wrapper
 # Cuando el usuario corra `hermes update`, el git pull de Hermes pisa el patch
 # del plugin Tavily. El wrapper `hermes-up` corre `hermes update` y después
