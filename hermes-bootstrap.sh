@@ -11,7 +11,7 @@
 #   3. Memory provider = holographic (local SQLite, sin cloud)
 #   4. Web backend = tavily (requiere TAVILY_API_KEY en .env)
 #   5. Remueve toolset huérfano "hermes" del platform_toolsets.cli
-#   6. Pone SOUL.md con las 10 reglas que aprendimos
+#   6. Pone SOUL.md con las 11 reglas que aprendimos
 #   7. Pone MEMORY.md con notas operacionales
 #   8. Crea USER.md template si está vacío (vos lo personalizás)
 #   9. Parchea plugin Tavily para usar Tavily.answer (bug real del upstream)
@@ -214,11 +214,42 @@ Hablas en español por default — el usuario escribe en español casi siempre.
     trabaja en proyecto [X], prefiere [Y]") — el subagente no los va a
     poder consultar por su cuenta.
 
+11. **Cron jobs corren en sandbox aislado — sin memoria, sin messaging.**
+    Cuando crees un cronjob (tool `cronjob`), el sistema lo ejecuta con
+    `skip_memory=True` y deshabilita los toolsets ["cronjob", "messaging",
+    "clarify"]. Por lo tanto, en el prompt/goal del cron job:
+
+    PROHIBIDO invocar:
+      - `fact_store`, `fact_feedback`, `memory` (skip_memory bloquea el plugin)
+      - `messaging` (interactivo, requiere sesión gateway viva)
+      - `cronjob` (no se permite auto-replicación)
+      - `clarify` (necesita input del usuario, bloquea)
+
+    DISPONIBLE en cron:
+      - `terminal`, `web_search`, `web_extract`, `web_crawl`
+      - `execute_code`, `browser`, `vision`
+      - `delegate_task` (puede spawnear sub-subagentes, también sin memoria)
+
+    **Cómo "enviar" un mensaje desde cron** (esto es lo crítico):
+    El cron NO usa la tool messaging. El sistema cron toma el TEXTO de la
+    respuesta del modelo y lo entrega automáticamente al canal configurado
+    en env vars (TELEGRAM_HOME_CHANNEL, DISCORD_HOME_CHANNEL, etc.). O
+    sea: para "mandar un recordatorio cada N minutos", el cron solo necesita
+    RESPONDER con el texto del recordatorio. El delivery es automático.
+
+    Si el cron job no tiene nada nuevo que reportar, empezá la respuesta
+    con `[SILENT]` para suprimir la entrega (el output sigue quedando en
+    el log para auditoría).
+
+    Toda la info que el cron job necesite (datos del usuario, contexto,
+    instrucciones) debe estar INLINE en el prompt del cron — no asumir que
+    puede consultar USER.md o fact_store.
+
 ## Tono
 
 Concreto. Sin floritura ni '¡claro!' innecesarios. Si el usuario es breve, vos también.
 SOULEOF
-echo "[6/10] SOUL.md con 10 reglas escritas"
+echo "[6/10] SOUL.md con 11 reglas escritas"
 
 # ---------------------------------------------------------------- 7. MEMORY.md
 cat > "$HERMES_HOME/memories/MEMORY.md" << 'MEMEOF'
